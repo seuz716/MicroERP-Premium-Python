@@ -12,14 +12,22 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy installed packages from builder
-COPY --from=builder /root/.local /root/.local
+# Crear usuario no-root para seguridad
+RUN useradd --create-home --shell /bin/bash appuser
 
-# Make sure scripts in .local are usable
-ENV PATH=/root/.local/bin:$PATH
+# Copiar paquetes instalados desde builder
+COPY --from=builder /root/.local /home/appuser/.local
 
-# Copy project files
+# Ajustar permisos y PATH
+RUN chown -R appuser:appuser /home/appuser/.local
+ENV PATH=/home/appuser/.local/bin:$PATH
+
+# Copiar código del proyecto
 COPY . .
+RUN chown -R appuser:appuser /app
+
+# Cambiar a usuario no-root
+USER appuser
 
 # Collect static files
 RUN python manage.py collectstatic --noinput || true

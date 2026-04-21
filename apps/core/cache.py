@@ -17,7 +17,7 @@ class ProductCache:
     """
     
     TTL = 60  # segundos
-    PREFIX = 'microerp:product'
+    PREFIX = f"microerp:{os.environ.get('DJANGO_SETTINGS_MODULE', 'development')}:product"
     ALL_PRODUCTS_KEY = f'{PREFIX}:all'
     
     @classmethod

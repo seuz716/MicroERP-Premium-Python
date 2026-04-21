@@ -21,6 +21,34 @@ class LockManager:
     DEFAULT_TIMEOUT = 15  # segundos
     DEFAULT_RETRIES = 3
     BACKOFF_BASE = 0.5  # 500ms base para exponential backoff
+    MAX_BACKOFF = 5.0  # límite máximo para evitar esperas excesivas
+    
+    @classmethod
+    def cleanup_phantom_locks(cls, key_pattern: str = 'lock:*', max_age_seconds: int = 45):
+        """
+        Detecta y libera locks fantasma (existentes >45s).
+        Debe ejecutarse periódicamente (ej: cada 5 minutos) vía Celery Beat.
+        """
+        try:
+            from django.core.cache import caches
+            redis_client = caches['default'].client.get_client()
+            phantom_count = 0
+            
+            for key in redis_client.keys(key_pattern):
+                ttl = redis_client.ttl(key)
+                # TTL -1 significa sin expiración, o TTL > max_age_seconds indica lock antiguo
+                if ttl == -1 or ttl > max_age_seconds:
+                    logger.warning(f"Phantom lock detectado: {key}, TTL: {ttl}s")
+                    redis_client.delete(key)
+                    phantom_count += 1
+            
+            if phantom_count > 0:
+                logger.info(f"Se limpiaron {phantom_count} phantom locks")
+            
+            return phantom_count
+        except Exception as e:
+            logger.error(f"Error limpiando phantom locks: {e}")
+            return 0
     
     @classmethod
     def acquire(cls, key: str, timeout: int = None, token: str = None) -> bool:
@@ -106,11 +134,14 @@ def with_lock(key: str, timeout: int = 15, retries: int = 3, backoff: float = 0.
                             # Ejecutar la función protegida
                             return func(*args, **kwargs)
                         finally:
-                            # Liberar el lock
-                            LockManager.release(lock_key, token)
+                            # Liberar el lock (siempre, incluso si hay error)
+                            try:
+                                LockManager.release(lock_key, token)
+                            except Exception as release_error:
+                                logger.error(f"Error liberando lock {lock_key}: {release_error}")
                     else:
-                        # Lock no disponible, esperar con exponential backoff
-                        wait_time = backoff * (2 ** attempt)
+                        # Lock no disponible, esperar con exponential backoff (limitado)
+                        wait_time = min(backoff * (2 ** attempt), cls.MAX_BACKOFF)
                         logger.warning(
                             f"Lock ocupado {lock_key}, intento {attempt + 1}/{retries}. "
                             f"Esperando {wait_time}s"
@@ -120,8 +151,11 @@ def with_lock(key: str, timeout: int = 15, retries: int = 3, backoff: float = 0.
                         
                 except Exception as e:
                     logger.error(f"Error en lock {lock_key}: {str(e)}")
-                    # Liberar lock en caso de error
-                    LockManager.release(lock_key, token)
+                    # Intentar liberar lock en caso de error (puede que no se haya adquirido)
+                    try:
+                        LockManager.release(lock_key, token)
+                    except Exception:
+                        pass  # El lock puede no haberse adquirido aún
                     raise
             
             # Se agotaron los reintentos
@@ -167,5 +201,8 @@ class DistributedLock:
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self.token:
-            LockManager.release(self.key, self.token)
+            try:
+                LockManager.release(self.key, self.token)
+            except Exception as e:
+                logger.error(f"Error liberando lock en __exit__: {e}")
         return False

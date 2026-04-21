@@ -2,7 +2,10 @@
 Modelos de Inventario - Productos y Entradas.
 """
 from django.db import models
+from django.db.models.signals import post_save, post_delete
+from django.dispatch import receiver
 from apps.core.validators import Validators
+from apps.core.cache import ProductCache
 
 
 class Producto(models.Model):
@@ -84,3 +87,10 @@ class Entrada(models.Model):
         Validators.validate_quantity(self.cantidad, 'Cantidad')
         Validators.validate_price(self.costo, 'Costo')
         super().save(*args, **kwargs)
+
+
+# Signals para invalidación automática del caché de productos
+@receiver([post_save, post_delete], sender=Producto)
+def invalidate_product_cache(sender, instance, **kwargs):
+    """Invalida el caché de un producto cuando se guarda o elimina."""
+    ProductCache.invalidate(instance.id)
