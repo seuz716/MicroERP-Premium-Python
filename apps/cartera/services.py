@@ -17,7 +17,7 @@ def crear_cliente_credito(nombre, limite_credito, usuario=None):
 
 @transaction.atomic
 def registrar_factura(id_cliente, items, fecha_vencimiento, usuario=None):
-    cliente = ClienteCredito.objects.get(id=id_cliente)
+    cliente = ClienteCredito.objects.select_for_update().get(id=id_cliente)
     monto_total = sum(Decimal(str(item.get('monto', 0))) for item in items)
     
     if cliente.saldo + monto_total > cliente.limite:
@@ -37,7 +37,7 @@ def registrar_factura(id_cliente, items, fecha_vencimiento, usuario=None):
 
 @transaction.atomic
 def registrar_pago(id_factura, monto, usuario=None):
-    factura = Factura.objects.get(id=id_factura)
+    factura = Factura.objects.select_for_update().get(id=id_factura)
     pago = Pago.objects.create(factura=factura, monto=Decimal(str(monto)))
     
     factura.cliente.saldo -= Decimal(str(monto))

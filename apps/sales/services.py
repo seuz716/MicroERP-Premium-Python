@@ -4,6 +4,7 @@ Lógica de negocio ATÓMICA para procesar ventas.
 """
 from django.db import transaction
 from django.core.cache import cache
+from django.db.models import Sum, F, DecimalField, Count
 from datetime import datetime, timedelta
 from decimal import Decimal
 from apps.sales.models import Venta, DetalleVenta
@@ -122,26 +123,30 @@ def get_dashboard_kpis():
     - Utilidad del día
     - Stock total
     - Valor de inventario
+    
+    OPTIMIZADO: Usa aggregate() en lugar de loops Python
     """
     hoy = datetime.now().date()
     
-    # Ventas de hoy
-    ventas_hoy = Venta.objects.filter(fecha__date=hoy)
-    total_ventas_hoy = ventas_hoy.count()
-    monto_ventas_hoy = sum(v.total for v in ventas_hoy)
+    # Ventas de hoy con aggregate (1 query)
+    ventas_stats = Venta.objects.filter(fecha__date=hoy).aggregate(
+        total_count=Count('id'),
+        monto_total=Sum('total', output_field=DecimalField())
+    )
+    total_ventas_hoy = ventas_stats['total_count'] or 0
+    monto_ventas_hoy = ventas_stats['monto_total'] or Decimal('0')
     
     # Calculamos utilidad (precio - costo promedio estimado)
     # En producción esto debería usar el costo real del producto
     utilidad_hoy = monto_ventas_hoy * Decimal('0.3')  # Estimado 30% margen
     
-    # Stock total
-    from apps.inventory.models import Producto
-    stock_total = sum(p.stock for p in Producto.objects.all())
-    
-    # Valor inventario
-    valor_inventario = sum(
-        p.stock * p.precio for p in Producto.objects.all()
+    # Stock total e inventario con aggregate (1 query)
+    inventario_stats = Producto.objects.aggregate(
+        total_stock=Sum('stock'),
+        valor_inventario=Sum(F('stock') * F('precio'), output_field=DecimalField())
     )
+    stock_total = inventario_stats['total_stock'] or 0
+    valor_inventario = inventario_stats['valor_inventario'] or Decimal('0')
     
     return {
         "ventas_hoy": total_ventas_hoy,
